@@ -4,6 +4,7 @@ import (
 	zipa "archive/zip"
 	"context"
 	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -227,7 +228,7 @@ func (c *Client) Check(ctx context.Context, pName, pVersion, hash string) error 
 		return nil
 	}
 
-	return fmt.Errorf("plugin integrity check failed")
+	return errors.New("plugin integrity check failed")
 }
 
 // Unzip unzip a plugin archive.
@@ -262,7 +263,7 @@ func (c *Client) unzipArchive(pName, pVersion string) error {
 	for _, f := range archive.File {
 		err = unzipFile(f, dest)
 		if err != nil {
-			return err
+			return fmt.Errorf("unable to unzip %s: %w", f.Name, err)
 		}
 	}
 
@@ -278,15 +279,28 @@ func unzipFile(f *zipa.File, dest string) error {
 	defer func() { _ = rc.Close() }()
 
 	pathParts := strings.SplitN(f.Name, "/", 2)
-	p := filepath.Join(dest, pathParts[1])
+
+	var pp string
+	if len(pathParts) < 2 {
+		pp = pathParts[0]
+	} else {
+		pp = pathParts[1]
+	}
+
+	p := filepath.Join(dest, pp)
 
 	if f.FileInfo().IsDir() {
-		return os.MkdirAll(p, f.Mode())
+		err = os.MkdirAll(p, f.Mode())
+		if err != nil {
+			return fmt.Errorf("unable to create archive directory %s: %w", p, err)
+		}
+
+		return nil
 	}
 
 	err = os.MkdirAll(filepath.Dir(p), 0o750)
 	if err != nil {
-		return err
+		return fmt.Errorf("unable to create archive directory %s for file %s: %w", filepath.Dir(p), p, err)
 	}
 
 	elt, err := os.OpenFile(p, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, f.Mode())
@@ -345,7 +359,7 @@ func (c *Client) WriteState(plugins map[string]Descriptor) error {
 
 	mp, err := json.MarshalIndent(m, "", "  ")
 	if err != nil {
-		return err
+		return fmt.Errorf("unable to marshal plugin state: %w", err)
 	}
 
 	return os.WriteFile(c.stateFile, mp, 0o600)
@@ -359,10 +373,15 @@ func (c *Client) ResetAll() error {
 
 	err := resetDirectory(filepath.Join(c.goPath, ".."))
 	if err != nil {
-		return err
+		return fmt.Errorf("unable to reset plugins GoPath directory %s: %w", c.goPath, err)
 	}
 
-	return resetDirectory(c.archives)
+	err = resetDirectory(c.archives)
+	if err != nil {
+		return fmt.Errorf("unable to reset plugins archives directory: %w", err)
+	}
+
+	return nil
 }
 
 func (c *Client) buildArchivePath(pName, pVersion string) string {
@@ -372,12 +391,12 @@ func (c *Client) buildArchivePath(pName, pVersion string) string {
 func resetDirectory(dir string) error {
 	dirPath, err := filepath.Abs(dir)
 	if err != nil {
-		return err
+		return fmt.Errorf("unable to get absolute path of %s: %w", dir, err)
 	}
 
 	currentPath, err := os.Getwd()
 	if err != nil {
-		return err
+		return fmt.Errorf("unable to get the current directory: %w", err)
 	}
 
 	if strings.HasPrefix(currentPath, dirPath) {
@@ -386,10 +405,15 @@ func resetDirectory(dir string) error {
 
 	err = os.RemoveAll(dir)
 	if err != nil {
-		return err
+		return fmt.Errorf("unable to remove directory %s: %w", dirPath, err)
 	}
 
-	return os.MkdirAll(dir, 0o755)
+	err = os.MkdirAll(dir, 0o755)
+	if err != nil {
+		return fmt.Errorf("unable to create directory %s: %w", dirPath, err)
+	}
+
+	return nil
 }
 
 func computeHash(filepath string) (string, error) {
@@ -406,5 +430,5 @@ func computeHash(filepath string) (string, error) {
 
 	sum := hash.Sum(nil)
 
-	return fmt.Sprintf("%x", sum), nil
+	return hex.EncodeToString(sum), nil
 }

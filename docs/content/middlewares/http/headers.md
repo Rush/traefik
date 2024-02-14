@@ -20,7 +20,7 @@ A set of forwarded headers are automatically added by default. See the [FAQ](../
 
 The following example adds the `X-Script-Name` header to the proxied request and the `X-Custom-Response-Header` header to the response
 
-```yaml tab="Docker"
+```yaml tab="Docker & Swarm"
 labels:
   - "traefik.http.middlewares.testHeader.headers.customrequestheaders.X-Script-Name=test"
   - "traefik.http.middlewares.testHeader.headers.customresponseheaders.X-Custom-Response-Header=value"
@@ -69,7 +69,7 @@ http:
 In the following example, requests are proxied with an extra `X-Script-Name` header while their `X-Custom-Request-Header` header gets stripped,
 and responses are stripped of their `X-Custom-Response-Header` header.
 
-```yaml tab="Docker"
+```yaml tab="Docker & Swarm"
 labels:
   - "traefik.http.middlewares.testheader.headers.customrequestheaders.X-Script-Name=test"
   - "traefik.http.middlewares.testheader.headers.customrequestheaders.X-Custom-Request-Header="
@@ -123,7 +123,7 @@ http:
 Security-related headers (HSTS headers, Browser XSS filter, etc) can be managed similarly to custom headers as shown above.
 This functionality makes it possible to easily use security features by adding headers.
 
-```yaml tab="Docker"
+```yaml tab="Docker & Swarm"
 labels:
   - "traefik.http.middlewares.testHeader.headers.framedeny=true"
   - "traefik.http.middlewares.testHeader.headers.browserxssfilter=true"
@@ -166,11 +166,14 @@ http:
 CORS (Cross-Origin Resource Sharing) headers can be added and configured in a manner similar to the custom headers above.
 This functionality allows for more advanced security features to quickly be set.
 If CORS headers are set, then the middleware does not pass preflight requests to any service,
-instead the response will be generated and sent back to the client directly.
+instead the response will be generated and sent back to the client directly.  
+Please note that the example below is by no means authoritative or exhaustive,
+and should not be used as is for production.
 
-```yaml tab="Docker"
+```yaml tab="Docker & Swarm"
 labels:
   - "traefik.http.middlewares.testheader.headers.accesscontrolallowmethods=GET,OPTIONS,PUT"
+  - "traefik.http.middlewares.testheader.headers.accesscontrolallowheaders=*"
   - "traefik.http.middlewares.testheader.headers.accesscontrolalloworiginlist=https://foo.bar.org,https://example.org"
   - "traefik.http.middlewares.testheader.headers.accesscontrolmaxage=100"
   - "traefik.http.middlewares.testheader.headers.addvaryheader=true"
@@ -187,6 +190,8 @@ spec:
       - "GET"
       - "OPTIONS"
       - "PUT"
+    accessControlAllowHeaders:
+      - "*"
     accessControlAllowOriginList:
       - "https://foo.bar.org"
       - "https://example.org"
@@ -196,6 +201,7 @@ spec:
 
 ```yaml tab="Consul Catalog"
 - "traefik.http.middlewares.testheader.headers.accesscontrolallowmethods=GET,OPTIONS,PUT"
+- "traefik.http.middlewares.testheader.headers.accesscontrolallowheaders=*"
 - "traefik.http.middlewares.testheader.headers.accesscontrolalloworiginlist=https://foo.bar.org,https://example.org"
 - "traefik.http.middlewares.testheader.headers.accesscontrolmaxage=100"
 - "traefik.http.middlewares.testheader.headers.addvaryheader=true"
@@ -210,6 +216,7 @@ http:
           - GET
           - OPTIONS
           - PUT
+        accessControlAllowHeaders: "*"
         accessControlAllowOriginList:
           - https://foo.bar.org
           - https://example.org
@@ -220,7 +227,8 @@ http:
 ```toml tab="File (TOML)"
 [http.middlewares]
   [http.middlewares.testHeader.headers]
-    accessControlAllowMethods= ["GET", "OPTIONS", "PUT"]
+    accessControlAllowMethods = ["GET", "OPTIONS", "PUT"]
+    accessControlAllowHeaders = [ "*" ]
     accessControlAllowOriginList = ["https://foo.bar.org","https://example.org"]
     accessControlMaxAge = 100
     addVaryHeader = true
@@ -306,10 +314,42 @@ The `allowedHosts` option lists fully qualified domain names that are allowed.
 
 The `hostsProxyHeaders` option is a set of header keys that may hold a proxied hostname value for the request.
 
+### `sslRedirect`
+
+!!! warning
+
+    Deprecated in favor of [EntryPoint redirection](../../routing/entrypoints.md#redirection) or the [RedirectScheme middleware](./redirectscheme.md).
+
+The `sslRedirect` only allow HTTPS requests when set to `true`.
+
+### `sslTemporaryRedirect`
+
+!!! warning
+
+    Deprecated in favor of [EntryPoint redirection](../../routing/entrypoints.md#redirection) or the [RedirectScheme middleware](./redirectscheme.md).
+
+Set `sslTemporaryRedirect` to `true` to force an SSL redirection using a 302 (instead of a 301).
+
+### `sslHost`
+
+!!! warning
+
+    Deprecated in favor of the [RedirectRegex middleware](./redirectregex.md).
+
+The `sslHost` option is the host name that is used to redirect HTTP requests to HTTPS.
+
 ### `sslProxyHeaders`
 
 The `sslProxyHeaders` option is set of header keys with associated values that would indicate a valid HTTPS request.
 It can be useful when using other proxies (example: `"X-Forwarded-Proto": "https"`).
+
+### `sslForceHost`
+
+!!! warning
+
+    Deprecated in favor of the [RedirectRegex middleware](./redirectregex.md).
+
+Set `sslForceHost` to `true` and set `sslHost` to force requests to use `SSLHost` regardless of whether they already use SSL.
 
 ### `stsSeconds`
 
@@ -361,6 +401,14 @@ The `publicKey` implements HPKP to prevent MITM attacks with forged certificates
 ### `referrerPolicy`
 
 The `referrerPolicy` allows sites to control whether browsers forward the `Referer` header to other sites.
+
+### `featurePolicy`
+
+!!! warning
+
+    Deprecated in favor of [`permissionsPolicy`](#permissionsPolicy)
+
+The `featurePolicy` allows sites to control browser features.
 
 ### `permissionsPolicy`
 

@@ -7,12 +7,12 @@ import (
 
 	"github.com/rs/zerolog/log"
 	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/client-go/kubernetes/scheme"
+	kscheme "k8s.io/client-go/kubernetes/scheme"
 )
 
 // MustParseYaml parses a YAML to objects.
 func MustParseYaml(content []byte) []runtime.Object {
-	acceptedK8sTypes := regexp.MustCompile(`^(Namespace|Deployment|Endpoints|Service|Ingress|IngressRoute|IngressRouteTCP|IngressRouteUDP|Middleware|MiddlewareTCP|Secret|TLSOption|TLSStore|TraefikService|IngressClass|ServersTransport|ServersTransportTCP|GatewayClass|Gateway|HTTPRoute|TCPRoute|TLSRoute)$`)
+	acceptedK8sTypes := regexp.MustCompile(`^(Namespace|Deployment|Endpoints|Service|Ingress|IngressRoute|IngressRouteTCP|IngressRouteUDP|Middleware|MiddlewareTCP|Secret|TLSOption|TLSStore|TraefikService|IngressClass|ServersTransport|ServersTransportTCP|GatewayClass|Gateway|HTTPRoute|TCPRoute|TLSRoute|ReferenceGrant)$`)
 
 	files := strings.Split(string(content), "---\n")
 	retVal := make([]runtime.Object, 0, len(files))
@@ -21,7 +21,7 @@ func MustParseYaml(content []byte) []runtime.Object {
 			continue
 		}
 
-		decode := scheme.Codecs.UniversalDeserializer().Decode
+		decode := kscheme.Codecs.UniversalDeserializer().Decode
 		obj, groupVersionKind, err := decode([]byte(file), nil, nil)
 		if err != nil {
 			panic(fmt.Sprintf("Error while decoding YAML object. Err was: %s", err))

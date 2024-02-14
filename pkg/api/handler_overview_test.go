@@ -15,11 +15,9 @@ import (
 	"github.com/traefik/traefik/v3/pkg/config/static"
 	"github.com/traefik/traefik/v3/pkg/provider/docker"
 	"github.com/traefik/traefik/v3/pkg/provider/file"
-	"github.com/traefik/traefik/v3/pkg/provider/hub"
 	"github.com/traefik/traefik/v3/pkg/provider/kubernetes/crd"
 	"github.com/traefik/traefik/v3/pkg/provider/kubernetes/ingress"
 	"github.com/traefik/traefik/v3/pkg/provider/rest"
-	"github.com/traefik/traefik/v3/pkg/tracing/jaeger"
 	"github.com/traefik/traefik/v3/pkg/types"
 )
 
@@ -235,6 +233,7 @@ func TestHandler_Overview(t *testing.T) {
 				API:    &static.API{},
 				Providers: &static.Providers{
 					Docker:            &docker.Provider{},
+					Swarm:             &docker.SwarmProvider{},
 					File:              &file.Provider{},
 					KubernetesIngress: &ingress.Provider{},
 					KubernetesCRD:     &crd.Provider{},
@@ -259,10 +258,7 @@ func TestHandler_Overview(t *testing.T) {
 				Metrics: &types.Metrics{
 					Prometheus: &types.Prometheus{},
 				},
-				Tracing: &static.Tracing{
-					Jaeger: &jaeger.Config{},
-				},
-				Hub: &hub.Provider{},
+				Tracing: &static.Tracing{},
 			},
 			confDyn: runtime.Configuration{},
 			expected: expected{
@@ -289,7 +285,7 @@ func TestHandler_Overview(t *testing.T) {
 				return
 			}
 
-			assert.Equal(t, resp.Header.Get("Content-Type"), "application/json")
+			assert.Equal(t, "application/json", resp.Header.Get("Content-Type"))
 			contents, err := io.ReadAll(resp.Body)
 			require.NoError(t, err)
 

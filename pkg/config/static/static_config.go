@@ -1,6 +1,7 @@
 package static
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -17,7 +18,6 @@ import (
 	"github.com/traefik/traefik/v3/pkg/provider/ecs"
 	"github.com/traefik/traefik/v3/pkg/provider/file"
 	"github.com/traefik/traefik/v3/pkg/provider/http"
-	"github.com/traefik/traefik/v3/pkg/provider/hub"
 	"github.com/traefik/traefik/v3/pkg/provider/kubernetes/crd"
 	"github.com/traefik/traefik/v3/pkg/provider/kubernetes/gateway"
 	"github.com/traefik/traefik/v3/pkg/provider/kubernetes/ingress"
@@ -27,14 +27,7 @@ import (
 	"github.com/traefik/traefik/v3/pkg/provider/kv/zk"
 	"github.com/traefik/traefik/v3/pkg/provider/nomad"
 	"github.com/traefik/traefik/v3/pkg/provider/rest"
-	"github.com/traefik/traefik/v3/pkg/tls"
-	"github.com/traefik/traefik/v3/pkg/tracing/datadog"
-	"github.com/traefik/traefik/v3/pkg/tracing/elastic"
-	"github.com/traefik/traefik/v3/pkg/tracing/haystack"
-	"github.com/traefik/traefik/v3/pkg/tracing/instana"
-	"github.com/traefik/traefik/v3/pkg/tracing/jaeger"
 	"github.com/traefik/traefik/v3/pkg/tracing/opentelemetry"
-	"github.com/traefik/traefik/v3/pkg/tracing/zipkin"
 	"github.com/traefik/traefik/v3/pkg/types"
 )
 
@@ -78,11 +71,21 @@ type Configuration struct {
 
 	CertificatesResolvers map[string]CertificateResolver `description:"Certificates resolvers configuration." json:"certificatesResolvers,omitempty" toml:"certificatesResolvers,omitempty" yaml:"certificatesResolvers,omitempty" export:"true"`
 
-	Hub *hub.Provider `description:"Traefik Hub configuration." json:"hub,omitempty" toml:"hub,omitempty" yaml:"hub,omitempty" label:"allowEmpty" file:"allowEmpty" export:"true"`
+	Experimental *Experimental `description:"Experimental features." json:"experimental,omitempty" toml:"experimental,omitempty" yaml:"experimental,omitempty" export:"true"`
 
-	Experimental *Experimental `description:"experimental features." json:"experimental,omitempty" toml:"experimental,omitempty" yaml:"experimental,omitempty" export:"true"`
+	Core *Core `description:"Core controls." json:"core,omitempty" toml:"core,omitempty" yaml:"core,omitempty" export:"true"`
 
 	Spiffe *SpiffeClientConfig `description:"SPIFFE integration configuration." json:"spiffe,omitempty" toml:"spiffe,omitempty" yaml:"spiffe,omitempty" export:"true"`
+}
+
+// Core configures Traefik core behavior.
+type Core struct {
+	DefaultRuleSyntax string `description:"Defines the rule parser default syntax (v2 or v3)" json:"defaultRuleSyntax,omitempty" toml:"defaultRuleSyntax,omitempty" yaml:"defaultRuleSyntax,omitempty"`
+}
+
+// SetDefaults sets the default values.
+func (c *Core) SetDefaults() {
+	c.DefaultRuleSyntax = "v3"
 }
 
 // SpiffeClientConfig defines the SPIFFE client configuration.
@@ -99,22 +102,22 @@ type CertificateResolver struct {
 // Global holds the global configuration.
 type Global struct {
 	CheckNewVersion    bool `description:"Periodically check if a new version has been released." json:"checkNewVersion,omitempty" toml:"checkNewVersion,omitempty" yaml:"checkNewVersion,omitempty" label:"allowEmpty" file:"allowEmpty" export:"true"`
-	SendAnonymousUsage bool `description:"Periodically send anonymous usage statistics. If the option is not specified, it will be enabled by default." json:"sendAnonymousUsage,omitempty" toml:"sendAnonymousUsage,omitempty" yaml:"sendAnonymousUsage,omitempty" label:"allowEmpty" file:"allowEmpty" export:"true"`
+	SendAnonymousUsage bool `description:"Periodically send anonymous usage statistics. If the option is not specified, it will be disabled by default." json:"sendAnonymousUsage,omitempty" toml:"sendAnonymousUsage,omitempty" yaml:"sendAnonymousUsage,omitempty" label:"allowEmpty" file:"allowEmpty" export:"true"`
 }
 
 // ServersTransport options to configure communication between Traefik and the servers.
 type ServersTransport struct {
-	InsecureSkipVerify  bool                `description:"Disable SSL certificate verification." json:"insecureSkipVerify,omitempty" toml:"insecureSkipVerify,omitempty" yaml:"insecureSkipVerify,omitempty" export:"true"`
-	RootCAs             []tls.FileOrContent `description:"Add cert file for self-signed certificate." json:"rootCAs,omitempty" toml:"rootCAs,omitempty" yaml:"rootCAs,omitempty"`
-	MaxIdleConnsPerHost int                 `description:"If non-zero, controls the maximum idle (keep-alive) to keep per-host. If zero, DefaultMaxIdleConnsPerHost is used" json:"maxIdleConnsPerHost,omitempty" toml:"maxIdleConnsPerHost,omitempty" yaml:"maxIdleConnsPerHost,omitempty" export:"true"`
-	ForwardingTimeouts  *ForwardingTimeouts `description:"Timeouts for requests forwarded to the backend servers." json:"forwardingTimeouts,omitempty" toml:"forwardingTimeouts,omitempty" yaml:"forwardingTimeouts,omitempty" export:"true"`
-	Spiffe              *Spiffe             `description:"Defines the SPIFFE configuration." json:"spiffe,omitempty" toml:"spiffe,omitempty" yaml:"spiffe,omitempty" label:"allowEmpty" file:"allowEmpty" export:"true"`
+	InsecureSkipVerify  bool                  `description:"Disable SSL certificate verification." json:"insecureSkipVerify,omitempty" toml:"insecureSkipVerify,omitempty" yaml:"insecureSkipVerify,omitempty" export:"true"`
+	RootCAs             []types.FileOrContent `description:"Add cert file for self-signed certificate." json:"rootCAs,omitempty" toml:"rootCAs,omitempty" yaml:"rootCAs,omitempty"`
+	MaxIdleConnsPerHost int                   `description:"If non-zero, controls the maximum idle (keep-alive) to keep per-host. If zero, DefaultMaxIdleConnsPerHost is used" json:"maxIdleConnsPerHost,omitempty" toml:"maxIdleConnsPerHost,omitempty" yaml:"maxIdleConnsPerHost,omitempty" export:"true"`
+	ForwardingTimeouts  *ForwardingTimeouts   `description:"Timeouts for requests forwarded to the backend servers." json:"forwardingTimeouts,omitempty" toml:"forwardingTimeouts,omitempty" yaml:"forwardingTimeouts,omitempty" export:"true"`
+	Spiffe              *Spiffe               `description:"Defines the SPIFFE configuration." json:"spiffe,omitempty" toml:"spiffe,omitempty" yaml:"spiffe,omitempty" label:"allowEmpty" file:"allowEmpty" export:"true"`
 }
 
 // Spiffe holds the SPIFFE configuration.
 type Spiffe struct {
 	IDs         []string `description:"Defines the allowed SPIFFE IDs (takes precedence over the SPIFFE TrustDomain)." json:"ids,omitempty" toml:"ids,omitempty" yaml:"ids,omitempty"`
-	TrustDomain string   `description:"Defines the allowed SPIFFE trust domain." json:"trustDomain,omitempty" yaml:"trustDomain,omitempty" toml:"trustDomain,omitempty"`
+	TrustDomain string   `description:"Defines the allowed SPIFFE trust domain." json:"trustDomain,omitempty" toml:"trustDomain,omitempty" yaml:"trustDomain,omitempty"`
 }
 
 // TCPServersTransport options to configure communication between Traefik and the servers.
@@ -132,16 +135,17 @@ type TCPServersTransport struct {
 
 // TLSClientConfig options to configure TLS communication between Traefik and the servers.
 type TLSClientConfig struct {
-	InsecureSkipVerify bool                `description:"Disables SSL certificate verification." json:"insecureSkipVerify,omitempty" toml:"insecureSkipVerify,omitempty" yaml:"insecureSkipVerify,omitempty" export:"true"`
-	RootCAs            []tls.FileOrContent `description:"Defines a list of CA secret used to validate self-signed certificate" json:"rootCAs,omitempty" toml:"rootCAs,omitempty" yaml:"rootCAs,omitempty"`
-	Spiffe             *Spiffe             `description:"Defines the SPIFFE TLS configuration." json:"spiffe,omitempty" toml:"spiffe,omitempty" yaml:"spiffe,omitempty" label:"allowEmpty" file:"allowEmpty" export:"true"`
+	InsecureSkipVerify bool                  `description:"Disables SSL certificate verification." json:"insecureSkipVerify,omitempty" toml:"insecureSkipVerify,omitempty" yaml:"insecureSkipVerify,omitempty" export:"true"`
+	RootCAs            []types.FileOrContent `description:"Defines a list of CA secret used to validate self-signed certificate" json:"rootCAs,omitempty" toml:"rootCAs,omitempty" yaml:"rootCAs,omitempty"`
+	Spiffe             *Spiffe               `description:"Defines the SPIFFE TLS configuration." json:"spiffe,omitempty" toml:"spiffe,omitempty" yaml:"spiffe,omitempty" label:"allowEmpty" file:"allowEmpty" export:"true"`
 }
 
 // API holds the API configuration.
 type API struct {
-	Insecure  bool `description:"Activate API directly on the entryPoint named traefik." json:"insecure,omitempty" toml:"insecure,omitempty" yaml:"insecure,omitempty" export:"true"`
-	Dashboard bool `description:"Activate dashboard." json:"dashboard,omitempty" toml:"dashboard,omitempty" yaml:"dashboard,omitempty" export:"true"`
-	Debug     bool `description:"Enable additional endpoints for debugging and profiling." json:"debug,omitempty" toml:"debug,omitempty" yaml:"debug,omitempty" export:"true"`
+	Insecure           bool `description:"Activate API directly on the entryPoint named traefik." json:"insecure,omitempty" toml:"insecure,omitempty" yaml:"insecure,omitempty" export:"true"`
+	Dashboard          bool `description:"Activate dashboard." json:"dashboard,omitempty" toml:"dashboard,omitempty" yaml:"dashboard,omitempty" export:"true"`
+	Debug              bool `description:"Enable additional endpoints for debugging and profiling." json:"debug,omitempty" toml:"debug,omitempty" yaml:"debug,omitempty" export:"true"`
+	DisableDashboardAd bool `description:"Disable ad in the dashboard." json:"disableDashboardAd,omitempty" toml:"disableDashboardAd,omitempty" yaml:"disableDashboardAd,omitempty" export:"true"`
 	// TODO: Re-enable statistics
 	// Statistics      *types.Statistics `description:"Enable more detailed statistics." json:"statistics,omitempty" toml:"statistics,omitempty" yaml:"statistics,omitempty" label:"allowEmpty" file:"allowEmpty" export:"true"`
 }
@@ -189,42 +193,40 @@ func (a *LifeCycle) SetDefaults() {
 
 // Tracing holds the tracing configuration.
 type Tracing struct {
-	ServiceName   string                `description:"Set the name for this service." json:"serviceName,omitempty" toml:"serviceName,omitempty" yaml:"serviceName,omitempty" export:"true"`
-	SpanNameLimit int                   `description:"Set the maximum character limit for Span names (default 0 = no limit)." json:"spanNameLimit,omitempty" toml:"spanNameLimit,omitempty" yaml:"spanNameLimit,omitempty" export:"true"`
-	Jaeger        *jaeger.Config        `description:"Settings for Jaeger." json:"jaeger,omitempty" toml:"jaeger,omitempty" yaml:"jaeger,omitempty" export:"true" label:"allowEmpty" file:"allowEmpty"`
-	Zipkin        *zipkin.Config        `description:"Settings for Zipkin." json:"zipkin,omitempty" toml:"zipkin,omitempty" yaml:"zipkin,omitempty" export:"true" label:"allowEmpty" file:"allowEmpty"`
-	Datadog       *datadog.Config       `description:"Settings for Datadog." json:"datadog,omitempty" toml:"datadog,omitempty" yaml:"datadog,omitempty" export:"true" label:"allowEmpty" file:"allowEmpty"`
-	Instana       *instana.Config       `description:"Settings for Instana." json:"instana,omitempty" toml:"instana,omitempty" yaml:"instana,omitempty" export:"true" label:"allowEmpty" file:"allowEmpty"`
-	Haystack      *haystack.Config      `description:"Settings for Haystack." json:"haystack,omitempty" toml:"haystack,omitempty" yaml:"haystack,omitempty" export:"true" label:"allowEmpty" file:"allowEmpty"`
-	Elastic       *elastic.Config       `description:"Settings for Elastic." json:"elastic,omitempty" toml:"elastic,omitempty" yaml:"elastic,omitempty" export:"true" label:"allowEmpty" file:"allowEmpty"`
-	OpenTelemetry *opentelemetry.Config `description:"Settings for OpenTelemetry." json:"openTelemetry,omitempty" toml:"openTelemetry,omitempty" yaml:"openTelemetry,omitempty" export:"true" label:"allowEmpty" file:"allowEmpty"`
+	ServiceName      string            `description:"Set the name for this service." json:"serviceName,omitempty" toml:"serviceName,omitempty" yaml:"serviceName,omitempty" export:"true"`
+	GlobalAttributes map[string]string `description:"Defines additional attributes (key:value) on all spans." json:"globalAttributes,omitempty" toml:"globalAttributes,omitempty" yaml:"globalAttributes,omitempty" export:"true"`
+	SampleRate       float64           `description:"Sets the rate between 0.0 and 1.0 of requests to trace." json:"sampleRate,omitempty" toml:"sampleRate,omitempty" yaml:"sampleRate,omitempty" export:"true"`
+	AddInternals     bool              `description:"Enables tracing for internal services (ping, dashboard, etc...)." json:"addInternals,omitempty" toml:"addInternals,omitempty" yaml:"addInternals,omitempty" export:"true"`
+
+	OTLP *opentelemetry.Config `description:"Settings for OpenTelemetry." json:"otlp,omitempty" toml:"otlp,omitempty" yaml:"otlp,omitempty" label:"allowEmpty" file:"allowEmpty" export:"true"`
 }
 
 // SetDefaults sets the default values.
 func (t *Tracing) SetDefaults() {
 	t.ServiceName = "traefik"
-	t.SpanNameLimit = 0
+	t.SampleRate = 1.0
 }
 
 // Providers contains providers configuration.
 type Providers struct {
 	ProvidersThrottleDuration ptypes.Duration `description:"Backends throttle duration: minimum duration between 2 events from providers before applying a new configuration. It avoids unnecessary reloads if multiples events are sent in a short amount of time." json:"providersThrottleDuration,omitempty" toml:"providersThrottleDuration,omitempty" yaml:"providersThrottleDuration,omitempty" export:"true"`
 
-	Docker            *docker.Provider               `description:"Enable Docker backend with default settings." json:"docker,omitempty" toml:"docker,omitempty" yaml:"docker,omitempty" export:"true" label:"allowEmpty" file:"allowEmpty"`
+	Docker *docker.Provider      `description:"Enable Docker backend with default settings." json:"docker,omitempty" toml:"docker,omitempty" yaml:"docker,omitempty" label:"allowEmpty" file:"allowEmpty" export:"true"`
+	Swarm  *docker.SwarmProvider `description:"Enable Docker Swarm backend with default settings." json:"swarm,omitempty" toml:"swarm,omitempty" yaml:"swarm,omitempty" label:"allowEmpty" file:"allowEmpty" export:"true"`
+
 	File              *file.Provider                 `description:"Enable File backend with default settings." json:"file,omitempty" toml:"file,omitempty" yaml:"file,omitempty" export:"true"`
-	KubernetesIngress *ingress.Provider              `description:"Enable Kubernetes backend with default settings." json:"kubernetesIngress,omitempty" toml:"kubernetesIngress,omitempty" yaml:"kubernetesIngress,omitempty" export:"true" label:"allowEmpty" file:"allowEmpty"`
-	KubernetesCRD     *crd.Provider                  `description:"Enable Kubernetes backend with default settings." json:"kubernetesCRD,omitempty" toml:"kubernetesCRD,omitempty" yaml:"kubernetesCRD,omitempty" export:"true" label:"allowEmpty" file:"allowEmpty"`
-	KubernetesGateway *gateway.Provider              `description:"Enable Kubernetes gateway api provider with default settings." json:"kubernetesGateway,omitempty" toml:"kubernetesGateway,omitempty" yaml:"kubernetesGateway,omitempty" export:"true" label:"allowEmpty" file:"allowEmpty"`
-	Rest              *rest.Provider                 `description:"Enable Rest backend with default settings." json:"rest,omitempty" toml:"rest,omitempty" yaml:"rest,omitempty" export:"true" label:"allowEmpty" file:"allowEmpty"`
+	KubernetesIngress *ingress.Provider              `description:"Enable Kubernetes backend with default settings." json:"kubernetesIngress,omitempty" toml:"kubernetesIngress,omitempty" yaml:"kubernetesIngress,omitempty" label:"allowEmpty" file:"allowEmpty" export:"true"`
+	KubernetesCRD     *crd.Provider                  `description:"Enable Kubernetes backend with default settings." json:"kubernetesCRD,omitempty" toml:"kubernetesCRD,omitempty" yaml:"kubernetesCRD,omitempty" label:"allowEmpty" file:"allowEmpty" export:"true"`
+	KubernetesGateway *gateway.Provider              `description:"Enable Kubernetes gateway api provider with default settings." json:"kubernetesGateway,omitempty" toml:"kubernetesGateway,omitempty" yaml:"kubernetesGateway,omitempty" label:"allowEmpty" file:"allowEmpty" export:"true"`
+	Rest              *rest.Provider                 `description:"Enable Rest backend with default settings." json:"rest,omitempty" toml:"rest,omitempty" yaml:"rest,omitempty" label:"allowEmpty" file:"allowEmpty" export:"true"`
 	ConsulCatalog     *consulcatalog.ProviderBuilder `description:"Enable ConsulCatalog backend with default settings." json:"consulCatalog,omitempty" toml:"consulCatalog,omitempty" yaml:"consulCatalog,omitempty" label:"allowEmpty" file:"allowEmpty" export:"true"`
 	Nomad             *nomad.ProviderBuilder         `description:"Enable Nomad backend with default settings." json:"nomad,omitempty" toml:"nomad,omitempty" yaml:"nomad,omitempty" label:"allowEmpty" file:"allowEmpty" export:"true"`
 	Ecs               *ecs.Provider                  `description:"Enable AWS ECS backend with default settings." json:"ecs,omitempty" toml:"ecs,omitempty" yaml:"ecs,omitempty" label:"allowEmpty" file:"allowEmpty" export:"true"`
-
-	Consul    *consul.ProviderBuilder `description:"Enable Consul backend with default settings." json:"consul,omitempty" toml:"consul,omitempty" yaml:"consul,omitempty" label:"allowEmpty" file:"allowEmpty"  export:"true"`
-	Etcd      *etcd.Provider          `description:"Enable Etcd backend with default settings." json:"etcd,omitempty" toml:"etcd,omitempty" yaml:"etcd,omitempty" label:"allowEmpty" file:"allowEmpty" export:"true"`
-	ZooKeeper *zk.Provider            `description:"Enable ZooKeeper backend with default settings." json:"zooKeeper,omitempty" toml:"zooKeeper,omitempty" yaml:"zooKeeper,omitempty" label:"allowEmpty" file:"allowEmpty" export:"true"`
-	Redis     *redis.Provider         `description:"Enable Redis backend with default settings." json:"redis,omitempty" toml:"redis,omitempty" yaml:"redis,omitempty" label:"allowEmpty" file:"allowEmpty" export:"true"`
-	HTTP      *http.Provider          `description:"Enable HTTP backend with default settings." json:"http,omitempty" toml:"http,omitempty" yaml:"http,omitempty" label:"allowEmpty" file:"allowEmpty" export:"true"`
+	Consul            *consul.ProviderBuilder        `description:"Enable Consul backend with default settings." json:"consul,omitempty" toml:"consul,omitempty" yaml:"consul,omitempty" label:"allowEmpty" file:"allowEmpty"  export:"true"`
+	Etcd              *etcd.Provider                 `description:"Enable Etcd backend with default settings." json:"etcd,omitempty" toml:"etcd,omitempty" yaml:"etcd,omitempty" label:"allowEmpty" file:"allowEmpty" export:"true"`
+	ZooKeeper         *zk.Provider                   `description:"Enable ZooKeeper backend with default settings." json:"zooKeeper,omitempty" toml:"zooKeeper,omitempty" yaml:"zooKeeper,omitempty" label:"allowEmpty" file:"allowEmpty" export:"true"`
+	Redis             *redis.Provider                `description:"Enable Redis backend with default settings." json:"redis,omitempty" toml:"redis,omitempty" yaml:"redis,omitempty" label:"allowEmpty" file:"allowEmpty" export:"true"`
+	HTTP              *http.Provider                 `description:"Enable HTTP backend with default settings." json:"http,omitempty" toml:"http,omitempty" yaml:"http,omitempty" label:"allowEmpty" file:"allowEmpty" export:"true"`
 
 	Plugin map[string]PluginConf `description:"Plugins configuration." json:"plugin,omitempty" toml:"plugin,omitempty" yaml:"plugin,omitempty"`
 }
@@ -255,22 +257,19 @@ func (c *Configuration) SetEffectiveConfiguration() {
 		}
 	}
 
-	if c.Hub != nil {
-		if err := c.initHubProvider(); err != nil {
-			c.Hub = nil
-			log.Error().Err(err).Msg("Unable to activate the Hub provider")
-		} else {
-			log.Debug().Msg("Hub provider has been activated")
+	if c.Providers.Docker != nil {
+		if c.Providers.Docker.HTTPClientTimeout < 0 {
+			c.Providers.Docker.HTTPClientTimeout = 0
 		}
 	}
 
-	if c.Providers.Docker != nil {
-		if c.Providers.Docker.SwarmModeRefreshSeconds <= 0 {
-			c.Providers.Docker.SwarmModeRefreshSeconds = ptypes.Duration(15 * time.Second)
+	if c.Providers.Swarm != nil {
+		if c.Providers.Swarm.RefreshSeconds <= 0 {
+			c.Providers.Swarm.RefreshSeconds = ptypes.Duration(15 * time.Second)
 		}
 
-		if c.Providers.Docker.HTTPClientTimeout < 0 {
-			c.Providers.Docker.HTTPClientTimeout = 0
+		if c.Providers.Swarm.HTTPClientTimeout < 0 {
+			c.Providers.Swarm.HTTPClientTimeout = 0
 		}
 	}
 
@@ -294,18 +293,7 @@ func (c *Configuration) SetEffectiveConfiguration() {
 }
 
 func (c *Configuration) hasUserDefinedEntrypoint() bool {
-	if len(c.EntryPoints) == 0 {
-		return false
-	}
-
-	switch len(c.EntryPoints) {
-	case 1:
-		return c.EntryPoints[hub.TunnelEntrypoint] == nil
-	case 2:
-		return c.EntryPoints[hub.TunnelEntrypoint] == nil || c.EntryPoints[hub.APIEntrypoint] == nil
-	default:
-		return true
-	}
+	return len(c.EntryPoints) != 0
 }
 
 func (c *Configuration) initACMEProvider() {
@@ -339,6 +327,29 @@ func (c *Configuration) ValidateConfiguration() error {
 			return fmt.Errorf("unable to initialize certificates resolver %q, as all ACME resolvers must use the same email", name)
 		}
 		acmeEmail = resolver.ACME.Email
+	}
+
+	if c.Core != nil {
+		switch c.Core.DefaultRuleSyntax {
+		case "v3": // NOOP
+		case "v2":
+			// TODO: point to migration guide.
+			log.Warn().Msgf("v2 rules syntax is now deprecated, please use v3 instead...")
+		default:
+			return fmt.Errorf("unsupported default rule syntax configuration: %q", c.Core.DefaultRuleSyntax)
+		}
+	}
+
+	if c.Tracing != nil && c.Tracing.OTLP != nil {
+		if c.Tracing.OTLP.GRPC != nil && c.Tracing.OTLP.GRPC.TLS != nil && c.Tracing.OTLP.GRPC.Insecure {
+			return errors.New("tracing OTLP GRPC: TLS and Insecure options are mutually exclusive")
+		}
+	}
+
+	if c.Metrics != nil && c.Metrics.OTLP != nil {
+		if c.Metrics.OTLP.GRPC != nil && c.Metrics.OTLP.GRPC.TLS != nil && c.Metrics.OTLP.GRPC.Insecure {
+			return errors.New("metrics OTLP GRPC: TLS and Insecure options are mutually exclusive")
+		}
 	}
 
 	return nil

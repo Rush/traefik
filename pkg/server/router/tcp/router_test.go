@@ -173,9 +173,11 @@ func Test_Routing(t *testing.T) {
 		map[string]traefiktls.Store{},
 		map[string]traefiktls.Options{
 			"default": {
+				MinVersion: "VersionTLS10",
 				MaxVersion: "VersionTLS10",
 			},
 			"tls10": {
+				MinVersion: "VersionTLS10",
 				MaxVersion: "VersionTLS10",
 			},
 			"tls12": {
@@ -495,6 +497,21 @@ func Test_Routing(t *testing.T) {
 			},
 		},
 		{
+			desc:    "HTTPS router && HTTPS CatchAll router",
+			routers: []applyRouter{routerHTTPS, routerHTTPSPathPrefix},
+			checks: []checkCase{
+				{
+					desc:          "HTTPS TLS 1.0 request should fail",
+					checkRouter:   checkHTTPSTLS10,
+					expectedError: "wrong TLS version",
+				},
+				{
+					desc:        "HTTPS TLS 1.2 request should be handled by HTTPS service",
+					checkRouter: checkHTTPSTLS12,
+				},
+			},
+		},
+		{
 			desc:    "All routers, all checks",
 			routers: []applyRouter{routerTCPCatchAll, routerHTTP, routerHTTPS, routerTCPTLS, routerTCPTLSCatchAll},
 			checks: []checkCase{
@@ -620,12 +637,12 @@ func Test_Routing(t *testing.T) {
 				err := check.checkRouter(epListener.Addr().String(), timeout)
 
 				if check.expectedError != "" {
-					require.NotNil(t, err, check.desc)
+					require.Error(t, err, check.desc)
 					assert.Contains(t, err.Error(), check.expectedError, check.desc)
 					continue
 				}
 
-				assert.Nil(t, err, check.desc)
+				assert.NoError(t, err, check.desc)
 			}
 
 			epListener.Close()
@@ -842,7 +859,7 @@ func checkTCPTLS(addr string, timeout time.Duration, tlsVersion uint16) (err err
 
 	err = conn.SetReadDeadline(time.Now().Add(timeout))
 	if err != nil {
-		return
+		return err
 	}
 
 	var buf bytes.Buffer
@@ -932,10 +949,10 @@ func TestPostgres(t *testing.T) {
 	// This test requires to have a TLS route, but does not actually check the
 	// content of the handler. It would require to code a TLS handshake to
 	// check the SNI and content of the handlerFunc.
-	err = router.muxerTCPTLS.AddRoute("HostSNI(`test.localhost`)", 0, nil)
+	err = router.muxerTCPTLS.AddRoute("HostSNI(`test.localhost`)", "", 0, nil)
 	require.NoError(t, err)
 
-	err = router.AddRoute("HostSNI(`*`)", 0, tcp2.HandlerFunc(func(conn tcp2.WriteCloser) {
+	err = router.muxerTCP.AddRoute("HostSNI(`*`)", "", 0, tcp2.HandlerFunc(func(conn tcp2.WriteCloser) {
 		_, _ = conn.Write([]byte("OK"))
 		_ = conn.Close()
 	}))

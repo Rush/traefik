@@ -5,6 +5,7 @@ import (
 	"crypto/x509"
 	"encoding/json"
 	"fmt"
+	"io"
 	stdlog "log"
 	"net/http"
 	"os"
@@ -34,7 +35,6 @@ import (
 	"github.com/traefik/traefik/v3/pkg/middlewares/accesslog"
 	"github.com/traefik/traefik/v3/pkg/provider/acme"
 	"github.com/traefik/traefik/v3/pkg/provider/aggregator"
-	"github.com/traefik/traefik/v3/pkg/provider/hub"
 	"github.com/traefik/traefik/v3/pkg/provider/tailscale"
 	"github.com/traefik/traefik/v3/pkg/provider/traefik"
 	"github.com/traefik/traefik/v3/pkg/safe"
@@ -44,16 +44,16 @@ import (
 	"github.com/traefik/traefik/v3/pkg/tcp"
 	traefiktls "github.com/traefik/traefik/v3/pkg/tls"
 	"github.com/traefik/traefik/v3/pkg/tracing"
-	"github.com/traefik/traefik/v3/pkg/tracing/jaeger"
 	"github.com/traefik/traefik/v3/pkg/types"
 	"github.com/traefik/traefik/v3/pkg/version"
+	"go.opentelemetry.io/otel/trace"
 )
 
 func main() {
 	// traefik config inits
 	tConfig := cmd.NewTraefikConfiguration()
 
-	loaders := []cli.ResourceLoader{&tcli.FileLoader{}, &tcli.FlagLoader{}, &tcli.EnvLoader{}}
+	loaders := []cli.ResourceLoader{&tcli.DeprecationLoader{}, &tcli.FileLoader{}, &tcli.FlagLoader{}, &tcli.EnvLoader{}}
 
 	cmdTraefik := &cli.Command{
 		Name: "traefik",
@@ -193,10 +193,13 @@ func setupServer(staticConfiguration *static.Configuration) (*server.Server, err
 
 	tsProviders := initTailscaleProviders(staticConfiguration, &providerAggregator)
 
-	// Metrics
+	// Observability
 
 	metricRegistries := registerMetricClients(staticConfiguration.Metrics)
 	metricsRegistry := metrics.NewMultiRegistry(metricRegistries)
+	accessLog := setupAccessLog(staticConfiguration.AccessLog)
+	tracer, tracerCloser := setupTracing(staticConfiguration.Tracing)
+	observabilityMgr := middleware.NewObservabilityMgr(*staticConfiguration, metricsRegistry, accessLog, tracer, tracerCloser)
 
 	// Entrypoints
 
@@ -208,6 +211,10 @@ func setupServer(staticConfiguration *static.Configuration) (*server.Server, err
 	serverEntryPointsUDP, err := server.NewUDPEntryPoints(staticConfiguration.EntryPoints)
 	if err != nil {
 		return nil, err
+	}
+
+	if staticConfiguration.API != nil {
+		version.DisableDashboardAd = staticConfiguration.API.DisableDashboardAd
 	}
 
 	// Plugins
@@ -235,19 +242,6 @@ func setupServer(staticConfiguration *static.Configuration) (*server.Server, err
 		}
 	}
 
-	// Traefik Hub
-
-	if staticConfiguration.Hub != nil {
-		if err = providerAggregator.AddProvider(staticConfiguration.Hub); err != nil {
-			return nil, fmt.Errorf("adding Traefik Hub provider: %w", err)
-		}
-
-		// API is mandatory for Traefik Hub to access the dynamic configuration.
-		if staticConfiguration.API == nil {
-			staticConfiguration.API = &static.API{}
-		}
-	}
-
 	// Service manager factory
 
 	var spiffeX509Source *workloadapi.X509Source
@@ -272,15 +266,11 @@ func setupServer(staticConfiguration *static.Configuration) (*server.Server, err
 	roundTripperManager := service.NewRoundTripperManager(spiffeX509Source)
 	dialerManager := tcp.NewDialerManager(spiffeX509Source)
 	acmeHTTPHandler := getHTTPChallengeHandler(acmeProviders, httpChallengeProvider)
-	managerFactory := service.NewManagerFactory(*staticConfiguration, routinesPool, metricsRegistry, roundTripperManager, acmeHTTPHandler)
+	managerFactory := service.NewManagerFactory(*staticConfiguration, routinesPool, observabilityMgr, roundTripperManager, acmeHTTPHandler)
 
 	// Router factory
 
-	accessLog := setupAccessLog(staticConfiguration.AccessLog)
-	tracer := setupTracing(staticConfiguration.Tracing)
-
-	chainBuilder := middleware.NewChainBuilder(metricsRegistry, accessLog, tracer)
-	routerFactory := server.NewRouterFactory(*staticConfiguration, managerFactory, tlsManager, chainBuilder, pluginBuilder, metricsRegistry, dialerManager)
+	routerFactory := server.NewRouterFactory(*staticConfiguration, managerFactory, tlsManager, observabilityMgr, pluginBuilder, dialerManager)
 
 	// Watcher
 
@@ -318,7 +308,7 @@ func setupServer(staticConfiguration *static.Configuration) (*server.Server, err
 	watcher.AddListener(switchRouter(routerFactory, serverEntryPointsTCP, serverEntryPointsUDP))
 
 	// Metrics
-	if metricsRegistry.IsEpEnabled() || metricsRegistry.IsSvcEnabled() {
+	if metricsRegistry.IsEpEnabled() || metricsRegistry.IsRouterEnabled() || metricsRegistry.IsSvcEnabled() {
 		var eps []string
 		for key := range serverEntryPointsTCP {
 			eps = append(eps, key)
@@ -354,17 +344,14 @@ func setupServer(staticConfiguration *static.Configuration) (*server.Server, err
 				continue
 			}
 
-			if _, ok := resolverNames[rt.TLS.CertResolver]; !ok &&
-				// "traefik-hub" is an allowed certificate resolver name in a Traefik Hub Experimental feature context.
-				// It is used to activate its own certificate resolution, even though it is not a "classical" traefik certificate resolver.
-				(staticConfiguration.Hub == nil || rt.TLS.CertResolver != "traefik-hub") {
+			if _, ok := resolverNames[rt.TLS.CertResolver]; !ok {
 				log.Error().Err(err).Str(logs.RouterName, rtName).Str("certificateResolver", rt.TLS.CertResolver).
 					Msg("Router uses a non-existent certificate resolver")
 			}
 		}
 	})
 
-	return server.NewServer(routinesPool, serverEntryPointsTCP, serverEntryPointsUDP, watcher, chainBuilder, accessLog), nil
+	return server.NewServer(routinesPool, serverEntryPointsTCP, serverEntryPointsUDP, watcher, observabilityMgr), nil
 }
 
 func getHTTPChallengeHandler(acmeProviders []*acme.Provider, httpChallengeProvider http.Handler) http.Handler {
@@ -394,11 +381,6 @@ func getDefaultsEntrypoints(staticConfiguration *static.Configuration) []string 
 		// By default all entrypoints are considered.
 		// If at least one is flagged, then only flagged entrypoints are included.
 		if hasDefinedDefaults && !cfg.AsDefault {
-			continue
-		}
-
-		// Traefik Hub entryPoint should not be used as a default entryPoint.
-		if hub.APIEntrypoint == name || hub.TunnelEntrypoint == name {
 			continue
 		}
 
@@ -538,15 +520,14 @@ func registerMetricClients(metricsConfig *types.Metrics) []metrics.Registry {
 		}
 	}
 
-	if metricsConfig.OpenTelemetry != nil {
+	if metricsConfig.OTLP != nil {
 		logger := log.With().Str(logs.MetricsProviderName, "openTelemetry").Logger()
 
-		openTelemetryRegistry := metrics.RegisterOpenTelemetry(logger.WithContext(context.Background()), metricsConfig.OpenTelemetry)
+		openTelemetryRegistry := metrics.RegisterOpenTelemetry(logger.WithContext(context.Background()), metricsConfig.OTLP)
 		if openTelemetryRegistry != nil {
 			registries = append(registries, openTelemetryRegistry)
 			logger.Debug().
-				Str("address", metricsConfig.OpenTelemetry.Address).
-				Str("pushInterval", metricsConfig.OpenTelemetry.PushInterval.String()).
+				Str("pushInterval", metricsConfig.OTLP.PushInterval.String()).
 				Msg("Configured OpenTelemetry metrics")
 		}
 	}
@@ -582,78 +563,18 @@ func setupAccessLog(conf *types.AccessLog) *accesslog.Handler {
 	return accessLoggerMiddleware
 }
 
-func setupTracing(conf *static.Tracing) *tracing.Tracing {
+func setupTracing(conf *static.Tracing) (trace.Tracer, io.Closer) {
 	if conf == nil {
-		return nil
+		return nil, nil
 	}
 
-	var backend tracing.Backend
-
-	if conf.Jaeger != nil {
-		backend = conf.Jaeger
-	}
-
-	if conf.Zipkin != nil {
-		if backend != nil {
-			log.Error().Msg("Multiple tracing backend are not supported: cannot create Zipkin backend.")
-		} else {
-			backend = conf.Zipkin
-		}
-	}
-
-	if conf.Datadog != nil {
-		if backend != nil {
-			log.Error().Msg("Multiple tracing backend are not supported: cannot create Datadog backend.")
-		} else {
-			backend = conf.Datadog
-		}
-	}
-
-	if conf.Instana != nil {
-		if backend != nil {
-			log.Error().Msg("Multiple tracing backend are not supported: cannot create Instana backend.")
-		} else {
-			backend = conf.Instana
-		}
-	}
-
-	if conf.Haystack != nil {
-		if backend != nil {
-			log.Error().Msg("Multiple tracing backend are not supported: cannot create Haystack backend.")
-		} else {
-			backend = conf.Haystack
-		}
-	}
-
-	if conf.Elastic != nil {
-		if backend != nil {
-			log.Error().Msg("Multiple tracing backend are not supported: cannot create Elastic backend.")
-		} else {
-			backend = conf.Elastic
-		}
-	}
-
-	if conf.OpenTelemetry != nil {
-		if backend != nil {
-			log.Error().Msg("Tracing backends are all mutually exclusive: cannot create OpenTelemetry backend.")
-		} else {
-			backend = conf.OpenTelemetry
-		}
-	}
-
-	if backend == nil {
-		log.Debug().Msg("Could not initialize tracing, using Jaeger by default")
-		defaultBackend := &jaeger.Config{}
-		defaultBackend.SetDefaults()
-		backend = defaultBackend
-	}
-
-	tracer, err := tracing.NewTracing(conf.ServiceName, conf.SpanNameLimit, backend)
+	tracer, closer, err := tracing.NewTracing(conf)
 	if err != nil {
 		log.Warn().Err(err).Msg("Unable to create tracer")
-		return nil
+		return nil, nil
 	}
-	return tracer
+
+	return tracer, closer
 }
 
 func checkNewVersion() {
